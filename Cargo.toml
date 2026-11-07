@@ -1,0 +1,36 @@
+[package]
+name = "codex-subagent-rs"
+version = "0.5.1"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Local Codex delegation over MCP, with Antigravity completion delivery"
+default-run = "codex-subagent-rs"
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+nix = { version = "0.30", features = ["signal", "process"] }
+notify = "8"
+rmcp = { version = "3.8", default-features = false, features = ["server", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "signal", "sync", "time", "fs"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[features]
+test-fixtures = []
+
+[[bin]]
+name = "fixture-codex"
+path = "tests/support/fake_codex.rs"
+required-features = ["test-fixtures"]
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[lints.clippy]
+await_holding_lock = "deny"

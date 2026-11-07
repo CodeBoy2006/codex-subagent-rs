@@ -1,0 +1,3 @@
+<native_subagent_policy>
+Use Codex's native subagents according to the global AGENTS.md.
+</native_subagent_policy>

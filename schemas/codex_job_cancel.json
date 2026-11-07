@@ -1,0 +1,1 @@
+{"name":"codex_job_cancel","description":"Terminate a running background delegation.","parameters":{"$schema":"http://json-schema.org/draft-07/schema#","properties":{"job_id":{"description":"The job_id returned by codex_delegate.","minLength":1,"type":"string"}},"required":["job_id"],"type":"object"}}
