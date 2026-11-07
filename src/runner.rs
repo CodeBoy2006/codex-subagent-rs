@@ -532,7 +532,7 @@ pub async fn run(
     progress: Progress,
 ) -> RunResult {
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(invocation.args.timeout_seconds.unwrap_or(1800));
+    let deadline = start + Duration::from_secs(invocation.args.timeout_seconds.unwrap_or(7200));
     let mut inv = invocation.clone();
     let mut aggregate = RunResult::default();
     let mut retries = 0;

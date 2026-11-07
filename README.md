@@ -103,6 +103,8 @@ A blocking `codex_delegate` call needs a `prompt` and either an explicit `model`
 
 A background call returns a `job_id`. If it says completion delivery is registered, let the Sidecar notify the originating chat; otherwise use `codex_job_status` and then `codex_job_result`. Continue a conversation with its **`thread_id`**, not its `job_id`.
 
+Delegations and follow-ups default to a two-hour execution budget (7200 seconds). Set `timeout_seconds` to override it within 1–7200 seconds. Capacity continuations share the original deadline.
+
 Follow-ups recover model, effort and directory from memory or Codex’s `thread/read` API after restart. The wrapper does not scan private session files. Settings in reports are requested settings; Codex enforces permissions. Worktree paths are read from native thread metadata when needed.
 
 Model listing uses each model's `context_window` from the installed CLI catalog, not a configuration override; missing values remain `unknown`. Catalog failures return the CLI error rather than a hardcoded substitute. Sign-in checks run only when `codex_doctor` is called.
