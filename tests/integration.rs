@@ -157,6 +157,23 @@ fn isolated(binary: &str, root: &Path) -> Command {
         .current_dir(root);
     cmd
 }
+async fn run_hook(root: &Path, event: &Value) -> Value {
+    let mut hook = isolated(BIN, root)
+        .arg("hook")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    hook.stdin
+        .take()
+        .unwrap()
+        .write_all(event.to_string().as_bytes())
+        .await
+        .unwrap();
+    let output = hook.wait_with_output().await.unwrap();
+    assert!(output.status.success());
+    serde_json::from_slice(&output.stdout).unwrap()
+}
 fn text(v: &Value) -> String {
     v["content"]
         .as_array()
@@ -867,28 +884,75 @@ async fn sidecar_replays_failures_routes_origins_and_does_not_replay_sent() {
 }
 
 #[tokio::test]
-async fn request_cancellation_host_signal_and_hook_entrypoint() {
+async fn hook_snapshots_reach_codex_for_blocking_background_and_follow_up() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let origin = uuid::Uuid::new_v4().to_string();
-    let event = json!({"conversationId":origin,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"prompt":"task","mode":"background","reply_to":"wrong-origin"}}}});
-    let mut hook = isolated(BIN, &root)
-        .arg("hook")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
+    let transcript = root.join("transcript.jsonl");
+    let mut c = Client::start(&root).await;
+    let mut thread_id = String::new();
+    for (tool, mode) in [
+        ("codex_delegate", "blocking"),
+        ("codex_delegate", "background"),
+        ("codex_follow_up", "blocking"),
+    ] {
+        std::fs::write(
+            &transcript,
+            format!(
+                "{}\n",
+                json!({"text":format!("history before {tool} {mode}")})
+            ),
+        )
         .unwrap();
-    hook.stdin
-        .take()
-        .unwrap()
-        .write_all(event.to_string().as_bytes())
-        .await
-        .unwrap();
-    let output = hook.wait_with_output().await.unwrap();
-    assert!(output.status.success());
-    let bound: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(bound["overwrite"]["Arguments"]["reply_to"], origin);
-    assert_eq!(bound["decision"], "ask");
+        let mut args = json!({"prompt":"CASE:success","working_dir":root});
+        if tool == "codex_follow_up" {
+            args["thread_id"] = json!(thread_id);
+        } else {
+            args["mode"] = json!(mode);
+            args["skip_git_repo_check"] = json!(true);
+        }
+        let event = json!({"conversationId":origin,"transcriptPath":transcript,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":tool,"Arguments":args}}});
+        let bound = run_hook(&root, &event).await;
+        assert_eq!(bound["decision"], "ask");
+        let updated = &bound["overwrite"]["Arguments"];
+        let mut result = c.call(tool, updated.clone()).await;
+        if mode == "background" {
+            assert_eq!(updated["reply_to"], origin);
+            result = c.finish_job(&job(&result)).await;
+        }
+        success(&result);
+        let returned_thread = thread(&result);
+        if tool == "codex_follow_up" {
+            assert_eq!(returned_thread, thread_id);
+        }
+        thread_id = returned_thread;
+        let prompt = std::fs::read_to_string(root.join(format!("{thread_id}.prompt"))).unwrap();
+        assert_eq!(
+            prompt,
+            format!(
+                "{NATIVE_AGENT_POLICY}\n\n{}",
+                updated["prompt"].as_str().unwrap()
+            )
+        );
+        assert!(prompt.contains("/events/snapshots/"));
+    }
+    let event = json!({"transcriptPath":root.join("missing.jsonl"),"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"prompt":"task"}}}});
+    let denied = run_hook(&root, &event).await;
+    assert_eq!(denied["decision"], "deny");
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Could not read transcript")
+    );
+    assert!(denied.get("overwrite").is_none());
+    c.stop().await;
+}
+
+#[tokio::test]
+async fn request_cancellation_and_host_signal() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
     let mut c = Client::start(&root).await;
     let request = c.next;
     c.next += 1;

@@ -30,7 +30,7 @@ async fn run() -> Result<()> {
     }
     if mode == "--help" || mode == "help" {
         println!(
-            "codex-subagent-rs [mcp|hook|sidecar] [--events-dir ABSOLUTE_PATH]\n\nDefault: serve eight Codex tools over MCP stdio.\nhook: bind Antigravity's original conversation from a JSON event on stdin.\nsidecar: watch saved completions and notify their originating conversations.\n\nCODEX_BIN selects the existing Codex CLI. CODEX_SUBAGENT_* variables configure\nmodel, effort, sandbox and inherited-tool policies. CODEX_SUBAGENT_COMPLETION_DIR\nselects the shared event directory; default ~/.local/share/codex-subagent-rs/completion/events.\nNo mode installs itself or edits client configuration."
+            "codex-subagent-rs [mcp|hook|sidecar] [--events-dir ABSOLUTE_PATH]\n\nDefault: serve eight Codex tools over MCP stdio.\nhook: attach an Antigravity conversation snapshot and bind background callbacks.\nsidecar: watch saved completions and notify their originating conversations.\n\nCODEX_BIN selects the existing Codex CLI. CODEX_SUBAGENT_* variables configure\nmodel, effort, sandbox and inherited-tool policies. CODEX_SUBAGENT_COMPLETION_DIR\nselects the shared event directory; default ~/.local/share/codex-subagent-rs/completion/events.\nNo mode installs itself or edits client configuration."
         );
         return Ok(());
     }
@@ -53,7 +53,10 @@ async fn run() -> Result<()> {
         "hook" => {
             let mut bytes = vec![];
             std::io::stdin().read_to_end(&mut bytes)?;
-            let result = completion::bind_hook(&serde_json::from_slice(&bytes)?)?;
+            let result = completion::bind_hook(&serde_json::from_slice(&bytes)?, &config.events)
+                .unwrap_or_else(|error| {
+                    serde_json::json!({"decision":"deny","reason":format!("Could not prepare Codex conversation context: {error:#}")})
+                });
             serde_json::to_writer(std::io::stdout(), &result)?;
             std::io::stdout().write_all(b"\n")?;
         }

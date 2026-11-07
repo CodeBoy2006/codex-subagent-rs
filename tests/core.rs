@@ -228,20 +228,125 @@ fn failed_or_invalid_structured_output_cannot_masquerade_as_success() {
     assert!(result.failure().is_some());
 }
 #[test]
-fn hook_and_completion_event_publication() {
+fn hook_attaches_private_full_snapshots_to_delegations_and_follow_ups() {
+    use std::{fs, os::unix::fs::PermissionsExt};
+
+    let origin = uuid::Uuid::new_v4().to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let events = dir.path().join("events with spaces");
+    let transcript = dir.path().join("transcript.jsonl");
+    let mut contents = format!("{}\n", json!({"text":"中文🦀".repeat(120_000)}));
+    let mut snapshots = vec![];
+    for (tool, extra) in [
+        ("codex_delegate", json!({})),
+        ("codex_delegate", json!({"mode":"blocking"})),
+        (
+            "codex_delegate",
+            json!({"mode":"background","reply_to":"untrusted"}),
+        ),
+        ("codex_follow_up", json!({"thread_id":"thread-1"})),
+    ] {
+        fs::write(&transcript, &contents).unwrap();
+        let mut args = json!({"prompt":"Keep the current task.","working_dir":dir.path()});
+        args.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let event = json!({"conversationId":origin,"transcriptPath":transcript,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":tool,"Arguments":args}}});
+        let bound = completion::bind_hook(&event, &events).unwrap();
+        assert_eq!(bound["decision"], "ask");
+        let updated = &bound["overwrite"]["Arguments"];
+        let prompt = updated["prompt"].as_str().unwrap();
+        assert!(prompt.starts_with("Keep the current task.\n\n"));
+        let snapshot = fs::read_dir(events.join("snapshots"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|path| prompt.contains(&format!("{path:?}")))
+            .unwrap();
+        assert!(!snapshots.iter().any(|(path, _)| path == &snapshot));
+        assert_eq!(fs::read(&snapshot).unwrap(), contents.as_bytes());
+        assert_eq!(
+            fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(snapshot.parent().unwrap())
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        for (key, value) in args.as_object().unwrap() {
+            if key != "prompt" && key != "reply_to" {
+                assert_eq!(&updated[key], value);
+            }
+        }
+        if args["mode"] == "background" {
+            assert_eq!(updated["reply_to"], origin);
+        } else {
+            assert!(updated.get("reply_to").is_none());
+        }
+        snapshots.push((snapshot, contents.clone()));
+        contents.push_str("{\"text\":\"new message\"}\n");
+    }
+    fs::write(&transcript, "later conversation").unwrap();
+    for (snapshot, original) in snapshots {
+        assert_eq!(fs::read_to_string(snapshot).unwrap(), original);
+    }
+}
+
+#[test]
+fn hook_ignores_other_calls_and_reports_snapshot_failures() {
+    let dir = tempfile::tempdir().unwrap();
+    let events = dir.path().join("events");
+    let mut event = json!({"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"prompt":"task"}}}});
+    for (name, server, tool) in [
+        ("other", "codex", "codex_delegate"),
+        ("call_mcp_tool", "other", "codex_delegate"),
+        ("call_mcp_tool", "codex", "codex_job_status"),
+    ] {
+        let mut ignored = event.clone();
+        ignored["toolCall"]["name"] = json!(name);
+        ignored["toolCall"]["args"]["ServerName"] = json!(server);
+        ignored["toolCall"]["args"]["ToolName"] = json!(tool);
+        assert_eq!(
+            completion::bind_hook(&ignored, &events).unwrap(),
+            json!({"decision":"ask"})
+        );
+    }
+    assert!(!events.exists());
+    assert!(
+        completion::bind_hook(&event, &events)
+            .unwrap_err()
+            .to_string()
+            .contains("transcriptPath")
+    );
+    let transcript = dir.path().join("transcript.jsonl");
+    event["transcriptPath"] = json!(transcript);
+    assert!(
+        completion::bind_hook(&event, &events)
+            .unwrap_err()
+            .to_string()
+            .contains("Could not read transcript")
+    );
+    std::fs::write(&transcript, "{\"text\":\"history\"}\n").unwrap();
+    event["toolCall"]["args"]["Arguments"]["prompt"] = json!(" \n\t");
+    assert!(
+        completion::bind_hook(&event, &events)
+            .unwrap_err()
+            .to_string()
+            .contains("prompt must not be empty")
+    );
+    event["toolCall"]["args"]["Arguments"]["prompt"] = json!("task");
+    std::fs::write(&events, "not a directory").unwrap();
+    assert!(completion::bind_hook(&event, &events).is_err());
+}
+
+#[test]
+fn completion_event_publication() {
     let origin = uuid::Uuid::new_v4().to_string();
     let job = uuid::Uuid::new_v4().to_string();
     let dir = tempfile::tempdir().unwrap();
-    let mut event = json!({"conversationId":origin,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"mode":"background","prompt":"task","reply_to":"untrusted"}}}});
-    let bound = completion::bind_hook(&event).unwrap();
-    assert_eq!(bound["decision"], "ask");
-    assert_eq!(bound["overwrite"]["Arguments"]["reply_to"], origin);
-    assert_eq!(bound["overwrite"]["Arguments"]["prompt"], "task");
-    event["toolCall"]["args"]["ServerName"] = json!("other");
-    assert_eq!(
-        completion::bind_hook(&event).unwrap(),
-        json!({"decision":"ask"})
-    );
     let completion_event = Event {
         job_id: job.clone(),
         conversation_id: origin,
