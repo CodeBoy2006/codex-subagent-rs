@@ -228,14 +228,13 @@ fn failed_or_invalid_structured_output_cannot_masquerade_as_success() {
     assert!(result.failure().is_some());
 }
 #[test]
-fn hook_attaches_private_full_snapshots_to_delegations_and_follow_ups() {
+fn hook_preserves_full_snapshots_but_passes_bounded_context() {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     let origin = uuid::Uuid::new_v4().to_string();
     let dir = tempfile::tempdir().unwrap();
     let events = dir.path().join("events with spaces");
     let transcript = dir.path().join("transcript.jsonl");
-    let mut contents = format!("{}\n", json!({"text":"中文🦀".repeat(120_000)}));
     let mut snapshots = vec![];
     for (tool, extra) in [
         ("codex_delegate", json!({})),
@@ -246,6 +245,13 @@ fn hook_attaches_private_full_snapshots_to_delegations_and_follow_ups() {
         ),
         ("codex_follow_up", json!({"thread_id":"thread-1"})),
     ] {
+        let latest = format!("最新需求 for {tool}: keep \"quoted text\" as data");
+        let contents = format!(
+            "{}\n{}\n{}\n",
+            json!({"text":"初始目标"}),
+            json!({"text":"中文🦀".repeat(120_000)}),
+            json!({"text":latest})
+        );
         fs::write(&transcript, &contents).unwrap();
         let mut args = json!({"prompt":"Keep the current task.","working_dir":dir.path()});
         args.as_object_mut()
@@ -257,12 +263,32 @@ fn hook_attaches_private_full_snapshots_to_delegations_and_follow_ups() {
         let updated = &bound["overwrite"]["Arguments"];
         let prompt = updated["prompt"].as_str().unwrap();
         assert!(prompt.starts_with("Keep the current task.\n\n"));
+        let preview: serde_json::Value = serde_json::from_str(
+            prompt
+                .split_once("Antigravity conversation snapshot preview (JSON data):\n")
+                .unwrap()
+                .1
+                .lines()
+                .next()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(preview["omitted_bytes"], contents.len() - 8 * 1024);
+        assert!(preview["beginning"].as_str().unwrap().contains("初始目标"));
+        assert!(
+            preview["ending"]
+                .as_str()
+                .unwrap()
+                .ends_with(&format!("{}\n", json!({"text":latest})))
+        );
+        assert!(prompt.len() < 16 * 1024);
         let snapshot = fs::read_dir(events.join("snapshots"))
             .unwrap()
             .map(|entry| entry.unwrap().path())
-            .find(|path| prompt.contains(&format!("{path:?}")))
+            .find(|path| !snapshots.iter().any(|(saved, _)| path == saved))
             .unwrap();
-        assert!(!snapshots.iter().any(|(path, _)| path == &snapshot));
+        assert!(!prompt.contains(snapshot.to_str().unwrap()));
+        assert!(!prompt.contains(transcript.to_str().unwrap()));
         assert_eq!(fs::read(&snapshot).unwrap(), contents.as_bytes());
         assert_eq!(
             fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
@@ -286,8 +312,7 @@ fn hook_attaches_private_full_snapshots_to_delegations_and_follow_ups() {
         } else {
             assert!(updated.get("reply_to").is_none());
         }
-        snapshots.push((snapshot, contents.clone()));
-        contents.push_str("{\"text\":\"new message\"}\n");
+        snapshots.push((snapshot, contents));
     }
     fs::write(&transcript, "later conversation").unwrap();
     for (snapshot, original) in snapshots {

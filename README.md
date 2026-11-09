@@ -41,7 +41,7 @@ MCP and Sidecar must share an absolute completion directory. Set `CODEX_SUBAGENT
 ~/.local/share/codex-subagent-rs/completion/events
 ```
 
-The Hook attaches conversation snapshots to `codex_delegate` and `codex_follow_up` calls on server `codex`. For background delegations, it also replaces `reply_to` with the host's conversation ID. Successful calls preserve `decision: "ask"`.
+The Hook supplies conversation context to `codex_delegate` and `codex_follow_up` calls on server `codex`. For background delegations, it also replaces `reply_to` with the host's conversation ID. Successful calls preserve `decision: "ask"`.
 
 The Sidecar uses `agentapi` from `PATH`. If Antigravity supplies `ANTIGRAVITY_AGENTAPI_EXE`, it invokes that binary with `agentapi send-message ...`. Register the Sidecar with the host when switching; running the MCP alone does not start notifications.
 
@@ -62,9 +62,11 @@ Register `codex-subagent-rs hook` as an Antigravity `PreToolUse` hook matching `
 }
 ```
 
-Each matching call copies the host-provided `transcriptPath` byte-for-byte into a new `snapshots/<uuid>.jsonl` file under the completion directory. The Hook appends its absolute path and a read instruction to the existing `prompt`. This covers blocking and background delegations and each follow-up, without new MCP parameters. Direct MCP calls outside Antigravity are unchanged. Keep the current task explicit in `prompt`; history is background, and the latest requirements take precedence.
+Each matching call saves a byte-for-byte copy of the host-provided transcript in a new `snapshots/<uuid>.jsonl` file under the completion directory. The Hook reads the snapshot and appends a preview to `prompt` as quoted JSON data. It includes the whole log up to 8 KiB of source bytes, or the first 2 KiB and last 6 KiB for longer logs. Codex gets this context directly, without a snapshot path or a separate file read. Put the current task, decisive prior findings, and access restrictions in `prompt`; the preview is background and may omit earlier details.
 
-Snapshots are private (directory `0700`, files `0600`), contain the full available transcript without summarization or truncation, and are not changed when the conversation continues. They remain on disk for follow-ups until you remove them; remove only snapshots no longer needed by a task. The file preserves what Antigravity logged, not attachment bytes absent from the log, and does not increase Codex's context window. Hook and Codex must share access to the snapshot path. A missing/unreadable transcript or a snapshot write failure denies the call with a reason instead of silently dropping context.
+This applies to blocking and background delegations and to each follow-up. Direct MCP calls are unchanged. To upgrade an existing installation, point the registered Hook at the new binary; no MCP argument or sandbox change is needed.
+
+Snapshots are private (directory `0700`, files `0600`) and remain on disk until removed. They preserve all bytes captured at the start of the copy, including anything omitted from the preview, but not attachments absent from the log. A missing, unreadable, or non-regular transcript, or a snapshot write failure, denies the call with a reason.
 
 The Hook uses Antigravity's documented [`transcriptPath` and argument overwrite contract](https://antigravity.google/docs/hooks#common-input-fields); it does not scan other conversations or modify the source transcript. Only enable it when the current conversation may be shared with Codex.
 

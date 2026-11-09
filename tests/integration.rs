@@ -162,6 +162,7 @@ async fn run_hook(root: &Path, event: &Value) -> Value {
         .arg("hook")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .unwrap();
     hook.stdin
@@ -884,7 +885,7 @@ async fn sidecar_replays_failures_routes_origins_and_does_not_replay_sent() {
 }
 
 #[tokio::test]
-async fn hook_snapshots_reach_codex_for_blocking_background_and_follow_up() {
+async fn hook_snapshot_context_reaches_codex_without_a_file_read() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let origin = uuid::Uuid::new_v4().to_string();
@@ -896,14 +897,9 @@ async fn hook_snapshots_reach_codex_for_blocking_background_and_follow_up() {
         ("codex_delegate", "background"),
         ("codex_follow_up", "blocking"),
     ] {
-        std::fs::write(
-            &transcript,
-            format!(
-                "{}\n",
-                json!({"text":format!("history before {tool} {mode}")})
-            ),
-        )
-        .unwrap();
+        let history = format!("历史记录 before {tool} {mode}");
+        let captured = format!("{}\n", json!({"text":history}));
+        std::fs::write(&transcript, &captured).unwrap();
         let mut args = json!({"prompt":"CASE:success","working_dir":root});
         if tool == "codex_follow_up" {
             args["thread_id"] = json!(thread_id);
@@ -934,7 +930,11 @@ async fn hook_snapshots_reach_codex_for_blocking_background_and_follow_up() {
                 updated["prompt"].as_str().unwrap()
             )
         );
-        assert!(prompt.contains("/events/snapshots/"));
+        assert!(
+            prompt.contains(&json!({"text":captured}).to_string()),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("/events/snapshots/"), "{prompt}");
     }
     let event = json!({"transcriptPath":root.join("missing.jsonl"),"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"prompt":"task"}}}});
     let denied = run_hook(&root, &event).await;
@@ -946,6 +946,23 @@ async fn hook_snapshots_reach_codex_for_blocking_background_and_follow_up() {
             .contains("Could not read transcript")
     );
     assert!(denied.get("overwrite").is_none());
+
+    let fifo = root.join("transcript-fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let mut event = event;
+    event["transcriptPath"] = json!(fifo);
+    let denied = timeout(Duration::from_secs(3), run_hook(&root, &event))
+        .await
+        .expect("Hook blocked opening a FIFO");
+    assert_eq!(denied["decision"], "deny");
+    assert!(denied["reason"].as_str().unwrap().contains("regular file"));
     c.stop().await;
 }
 
