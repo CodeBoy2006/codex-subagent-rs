@@ -224,6 +224,7 @@ pub struct RunArgs {
     pub timeout_seconds: Option<u64>,
     pub mode: Option<String>,
     pub reply_to: Option<String>,
+    pub snapshot_id: Option<uuid::Uuid>,
     pub output_schema: Option<serde_json::Value>,
 }
 impl RunArgs {

@@ -1,13 +1,15 @@
 use crate::{
+    app_server, completion,
     config::{Config, NATIVE_AGENT_POLICY, RunArgs, valid_thread},
     inheritance::Inheritance,
     process::{self, Control, Stop},
     session::{self, Settings},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    collections::BTreeSet,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -22,6 +24,75 @@ pub struct Invocation {
     pub args: RunArgs,
     pub inheritance: Inheritance,
     pub prompt: String,
+    pub snapshot_profile: Option<[String; 2]>,
+}
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct WorkspaceWrite {
+    writable_roots: Vec<PathBuf>,
+    network_access: bool,
+    exclude_tmpdir_env_var: bool,
+    exclude_slash_tmp: bool,
+}
+
+pub(crate) async fn snapshot_profile(
+    config: &Config,
+    settings: &Settings,
+    args: &RunArgs,
+    control: &Control,
+) -> Result<Option<[String; 2]>> {
+    let Some(id) = args.snapshot_id else {
+        return Ok(None);
+    };
+    ensure!(
+        settings.sandbox != "danger-full-access",
+        "Snapshot access requires a read-only or workspace-write sandbox"
+    );
+    let mut fields = String::new();
+    let mut files = String::new();
+    let parent = if settings.sandbox == "workspace-write" {
+        let effective = app_server::read(
+            config,
+            &settings.cwd,
+            "config/read",
+            json!({"cwd":settings.cwd,"includeLayers":false}),
+            control,
+        )
+        .await?;
+        let legacy: Option<WorkspaceWrite> =
+            serde_json::from_value(effective["config"]["sandbox_workspace_write"].clone())?;
+        let legacy = legacy.unwrap_or_default();
+        let roots: BTreeSet<_> = legacy.writable_roots.iter().chain(&args.add_dirs).collect();
+        let roots = roots
+            .into_iter()
+            .map(|p| format!("{}=true", json!(p)))
+            .collect::<Vec<_>>()
+            .join(",");
+        fields = format!(
+            ",workspace_roots={{{roots}}},network={{enabled={}}}",
+            legacy.network_access
+        );
+        if legacy.exclude_tmpdir_env_var {
+            files.push_str(r#",":tmpdir"="read""#);
+        }
+        if legacy.exclude_slash_tmp {
+            files.push_str(r#",":slash_tmp"="read""#);
+        }
+        ":workspace"
+    } else {
+        ":read-only"
+    };
+    let path = completion::claim_snapshot(&config.events, id)?;
+    let dir = path.parent().context("Snapshot has no parent directory")?;
+    let name = format!("antigravity_snapshot_{}", id.simple());
+    Ok(Some([
+        format!(r#"default_permissions="{name}""#),
+        format!(
+            r#"permissions.{name}={{extends="{parent}",filesystem={{{}="deny",{}="read"{files}}}{fields}}}"#,
+            json!(dir),
+            json!(path)
+        ),
+    ]))
 }
 impl Invocation {
     pub fn argv(&self, schema: Option<&Path>) -> Result<Vec<String>> {
@@ -50,23 +121,38 @@ impl Invocation {
         ] {
             a.extend(["--config".into(), setting.into()]);
         }
-        if self.args.thread_id.is_some() {
+        if let Some(profile) = &self.snapshot_profile {
+            a.push("--strict-config".into());
+            for setting in profile {
+                a.extend(["--config".into(), setting.clone()]);
+            }
+            if self.args.auto_approve && self.settings.sandbox == "workspace-write" {
+                a.extend([
+                    "--config".into(),
+                    r#"approval_policy="on-request""#.into(),
+                    "--config".into(),
+                    r#"approvals_reviewer="auto_review""#.into(),
+                ]);
+            }
+        } else if self.args.thread_id.is_some() {
             a.extend([
                 "--config".into(),
                 format!("sandbox_mode={}", json!(self.settings.sandbox)),
             ]);
+        } else if self.args.auto_approve && self.settings.sandbox == "workspace-write" {
+            a.push("--approve-for-me".into());
         } else {
-            if self.args.auto_approve && self.settings.sandbox == "workspace-write" {
-                a.push("--approve-for-me".into());
-            } else {
-                a.extend(["--sandbox".into(), self.settings.sandbox.clone()]);
-            }
+            a.extend(["--sandbox".into(), self.settings.sandbox.clone()]);
+        }
+        if self.args.thread_id.is_none() {
             a.extend([
                 "--cd".into(),
                 self.settings.cwd.to_string_lossy().into_owned(),
             ]);
-            for dir in &self.args.add_dirs {
-                a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
+            if self.snapshot_profile.is_none() || self.settings.sandbox == "read-only" {
+                for dir in &self.args.add_dirs {
+                    a.extend(["--add-dir".into(), dir.to_string_lossy().into_owned()]);
+                }
             }
             if self.args.use_worktree {
                 a.extend(["--enable".into(), "worktrees".into(), "--worktree".into()]);

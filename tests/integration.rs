@@ -885,32 +885,42 @@ async fn sidecar_replays_failures_routes_origins_and_does_not_replay_sent() {
 }
 
 #[tokio::test]
-async fn hook_snapshot_context_reaches_codex_without_a_file_read() {
+async fn hook_grants_only_this_full_snapshot_without_changing_the_prompt() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();
     let origin = uuid::Uuid::new_v4().to_string();
     let transcript = root.join("transcript.jsonl");
+    let extra = root.join("caller extra");
+    std::fs::create_dir(&extra).unwrap();
     let mut c = Client::start(&root).await;
     let mut thread_id = String::new();
-    for (tool, mode) in [
-        ("codex_delegate", "blocking"),
-        ("codex_delegate", "background"),
-        ("codex_follow_up", "blocking"),
+    let mut previous = None;
+    for (tool, mode, sandbox) in [
+        ("codex_delegate", "blocking", "read-only"),
+        ("codex_delegate", "background", "workspace-write"),
+        ("codex_follow_up", "blocking", "workspace-write"),
     ] {
         let history = format!("历史记录 before {tool} {mode}");
         let captured = format!("{}\n", json!({"text":history}));
         std::fs::write(&transcript, &captured).unwrap();
-        let mut args = json!({"prompt":"CASE:success","working_dir":root});
+        let mut args = json!({"prompt":"CASE:success","working_dir":root,"sandbox":sandbox});
         if tool == "codex_follow_up" {
             args["thread_id"] = json!(thread_id);
         } else {
             args["mode"] = json!(mode);
             args["skip_git_repo_check"] = json!(true);
+            if mode == "background" {
+                args["add_dirs"] = json!([extra]);
+            }
         }
         let event = json!({"conversationId":origin,"transcriptPath":transcript,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":tool,"Arguments":args}}});
         let bound = run_hook(&root, &event).await;
         assert_eq!(bound["decision"], "ask");
         let updated = &bound["overwrite"]["Arguments"];
+        assert_eq!(updated["prompt"], args["prompt"]);
+        let id = updated["snapshot_id"].as_str().unwrap();
+        let archive = root.join("events/snapshots");
+        let file = archive.join(format!("{id}.jsonl"));
         let mut result = c.call(tool, updated.clone()).await;
         if mode == "background" {
             assert_eq!(updated["reply_to"], origin);
@@ -923,18 +933,41 @@ async fn hook_snapshot_context_reaches_codex_without_a_file_read() {
         }
         thread_id = returned_thread;
         let prompt = std::fs::read_to_string(root.join(format!("{thread_id}.prompt"))).unwrap();
-        assert_eq!(
-            prompt,
-            format!(
-                "{NATIVE_AGENT_POLICY}\n\n{}",
-                updated["prompt"].as_str().unwrap()
-            )
-        );
-        assert!(
-            prompt.contains(&json!({"text":captured}).to_string()),
-            "{prompt}"
-        );
-        assert!(!prompt.contains("/events/snapshots/"), "{prompt}");
+        assert_eq!(prompt, format!("{NATIVE_AGENT_POLICY}\n\nCASE:success"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), captured);
+        assert!(!archive.join(format!("{id}.pending.jsonl")).exists());
+        let last = calls(&root)
+            .into_iter()
+            .rfind(|call| call["args"][0] == "exec")
+            .unwrap();
+        let argv = last["args"].as_array().unwrap();
+        let rule = argv
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|s| s.starts_with("permissions.antigravity_snapshot_"))
+            .unwrap();
+        assert!(rule.contains(&format!(r#"{}="deny""#, json!(archive))));
+        assert!(rule.contains(&format!(r#"{}="read""#, json!(file))));
+        assert!(!argv.iter().any(
+            |s| s == "--sandbox" || s.as_str().is_some_and(|s| s.starts_with("sandbox_mode="))
+        ));
+        if let Some(older) = previous.replace(id.to_owned()) {
+            assert!(!rule.contains(&older), "{rule}");
+        }
+        if sandbox == "workspace-write" {
+            assert!(rule.contains(r#"extends=":workspace""#));
+            assert!(rule.contains(r#"network={enabled=true}"#));
+            assert!(rule.contains(r#"":slash_tmp"="read""#));
+            assert!(rule.contains(&format!("{}=true", json!(root.join("legacy extra")))));
+            if mode == "background" {
+                assert!(rule.contains(&format!("{}=true", json!(extra))));
+            }
+        } else {
+            assert!(rule.contains(r#"extends=":read-only""#));
+        }
+        let replay = c.call(tool, updated.clone()).await;
+        assert_eq!(replay["isError"], true);
+        assert!(text(&replay).contains("already used"));
     }
     let event = json!({"transcriptPath":root.join("missing.jsonl"),"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_delegate","Arguments":{"prompt":"task"}}}});
     let denied = run_hook(&root, &event).await;

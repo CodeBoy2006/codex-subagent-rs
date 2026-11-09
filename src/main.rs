@@ -30,7 +30,7 @@ async fn run() -> Result<()> {
     }
     if mode == "--help" || mode == "help" {
         println!(
-            "codex-subagent-rs [mcp|hook|sidecar] [--events-dir ABSOLUTE_PATH]\n\nDefault: serve eight Codex tools over MCP stdio.\nhook: save the Antigravity snapshot, attach a preview, and bind background callbacks.\nsidecar: watch saved completions and notify their originating conversations.\n\nCODEX_BIN selects the existing Codex CLI. CODEX_SUBAGENT_* variables configure\nmodel, effort, sandbox and inherited-tool policies. CODEX_SUBAGENT_COMPLETION_DIR\nselects the shared event directory; default ~/.local/share/codex-subagent-rs/completion/events.\nNo mode installs itself or edits client configuration."
+            "codex-subagent-rs [mcp|hook|sidecar] [--events-dir ABSOLUTE_PATH]\n\nDefault: serve eight Codex tools over MCP stdio.\nhook: save the Antigravity snapshot, attach its reference, and bind background callbacks.\nsidecar: watch saved completions and notify their originating conversations.\n\nCODEX_BIN selects the existing Codex CLI. CODEX_SUBAGENT_* variables configure\nmodel, effort, sandbox and inherited-tool policies. CODEX_SUBAGENT_COMPLETION_DIR\nselects the shared event directory; default ~/.local/share/codex-subagent-rs/completion/events.\nNo mode installs itself or edits client configuration."
         );
         return Ok(());
     }

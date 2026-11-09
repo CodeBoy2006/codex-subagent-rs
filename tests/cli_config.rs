@@ -30,6 +30,7 @@ async fn native_agent_enablement_preserves_existing_agent_policy() {
             args: RunArgs::default(),
             inheritance: Default::default(),
             prompt: String::new(),
+            snapshot_profile: None,
         };
         let argv = inv.argv(None).unwrap();
         let mut command = Command::new(&binary);

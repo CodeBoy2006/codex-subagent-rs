@@ -62,11 +62,11 @@ Register `codex-subagent-rs hook` as an Antigravity `PreToolUse` hook matching `
 }
 ```
 
-Each matching call saves a byte-for-byte copy of the host-provided transcript in a new `snapshots/<uuid>.jsonl` file under the completion directory. The Hook reads the snapshot and appends a preview to `prompt` as quoted JSON data. It includes the whole log up to 8 KiB of source bytes, or the first 2 KiB and last 6 KiB for longer logs. Codex gets this context directly, without a snapshot path or a separate file read. Put the current task, decisive prior findings, and access restrictions in `prompt`; the preview is background and may omit earlier details.
+Each matching call saves the complete host-provided transcript and attaches a one-use reference. The MCP grants Codex read access to that file and denies access to other snapshots in the same directory. Codex sees the allowed path in its native permission context and can decide whether to read it. The Hook does not change `prompt`.
 
-This applies to blocking and background delegations and to each follow-up. Direct MCP calls are unchanged. To upgrade an existing installation, point the registered Hook at the new binary; no MCP argument or sandbox change is needed.
+This applies to blocking and background delegations and to each follow-up, with a fresh snapshot for each call. Use a CLI that supports per-invocation permission profiles (verified with Codex CLI 0.165.0) and select `read-only` or `workspace-write`. Upgrade the Hook and MCP together; the Sidecar and global Codex configuration need no changes. Direct MCP calls without a Hook reference keep their existing behavior.
 
-Snapshots are private (directory `0700`, files `0600`) and remain on disk until removed. They preserve all bytes captured at the start of the copy, including anything omitted from the preview, but not attachments absent from the log. A missing, unreadable, or non-regular transcript, or a snapshot write failure, denies the call with a reason.
+Snapshots are private (directory `0700`, files `0600`) and remain on disk until removed. The Hook saves `snapshots/<uuid>.pending.jsonl`; the MCP claims it by renaming it to `snapshots/<uuid>.jsonl`. A snapshot contains all bytes present at the start of the copy, not attachments absent from the log. A missing, unreadable, or non-regular transcript, or a snapshot write failure, denies the call with a reason.
 
 The Hook uses Antigravity's documented [`transcriptPath` and argument overwrite contract](https://antigravity.google/docs/hooks#common-input-fields); it does not scan other conversations or modify the source transcript. Only enable it when the current conversation may be shared with Codex.
 

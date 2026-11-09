@@ -95,6 +95,16 @@ fn main() {
                         emit(response);
                         continue;
                     }
+                    if v["method"] == "config/read" {
+                        emit(
+                            json!({"id":2,"result":{"config":{"sandbox_workspace_write":{
+                                "writable_roots":[root.join("legacy extra")],
+                                "network_access":true,
+                                "exclude_slash_tmp":true
+                            }}}}),
+                        );
+                        continue;
+                    }
                     emit(
                         json!({"id":2,"error":{"code":-32601,"message":"unsupported fixture method"}}),
                     );

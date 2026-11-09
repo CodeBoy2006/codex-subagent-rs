@@ -122,6 +122,7 @@ fn argument_boundaries_and_native_execution_options() {
         args,
         inheritance: Default::default(),
         prompt: String::new(),
+        snapshot_profile: None,
     };
     assert!(inv.argv(None).is_err());
     inv.args.thread_id = Some("thread-1".into());
@@ -176,6 +177,7 @@ fn cancelled_results_preserve_thread_without_suggesting_follow_up() {
         args: RunArgs::default(),
         inheritance: Default::default(),
         prompt: String::new(),
+        snapshot_profile: None,
     };
     let mut result = RunResult {
         exit_code: Some(0),
@@ -228,7 +230,7 @@ fn failed_or_invalid_structured_output_cannot_masquerade_as_success() {
     assert!(result.failure().is_some());
 }
 #[test]
-fn hook_preserves_full_snapshots_but_passes_bounded_context() {
+fn hook_preserves_full_private_snapshots_without_changing_prompt() {
     use std::{fs, os::unix::fs::PermissionsExt};
 
     let origin = uuid::Uuid::new_v4().to_string();
@@ -261,34 +263,9 @@ fn hook_preserves_full_snapshots_but_passes_bounded_context() {
         let bound = completion::bind_hook(&event, &events).unwrap();
         assert_eq!(bound["decision"], "ask");
         let updated = &bound["overwrite"]["Arguments"];
-        let prompt = updated["prompt"].as_str().unwrap();
-        assert!(prompt.starts_with("Keep the current task.\n\n"));
-        let preview: serde_json::Value = serde_json::from_str(
-            prompt
-                .split_once("Antigravity conversation snapshot preview (JSON data):\n")
-                .unwrap()
-                .1
-                .lines()
-                .next()
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(preview["omitted_bytes"], contents.len() - 8 * 1024);
-        assert!(preview["beginning"].as_str().unwrap().contains("初始目标"));
-        assert!(
-            preview["ending"]
-                .as_str()
-                .unwrap()
-                .ends_with(&format!("{}\n", json!({"text":latest})))
-        );
-        assert!(prompt.len() < 16 * 1024);
-        let snapshot = fs::read_dir(events.join("snapshots"))
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .find(|path| !snapshots.iter().any(|(saved, _)| path == saved))
-            .unwrap();
-        assert!(!prompt.contains(snapshot.to_str().unwrap()));
-        assert!(!prompt.contains(transcript.to_str().unwrap()));
+        let id = uuid::Uuid::parse_str(updated["snapshot_id"].as_str().unwrap()).unwrap();
+        let snapshot = events.join("snapshots").join(format!("{id}.pending.jsonl"));
+        assert!(!snapshots.iter().any(|(saved, _)| &snapshot == saved));
         assert_eq!(fs::read(&snapshot).unwrap(), contents.as_bytes());
         assert_eq!(
             fs::metadata(&snapshot).unwrap().permissions().mode() & 0o777,
@@ -303,7 +280,7 @@ fn hook_preserves_full_snapshots_but_passes_bounded_context() {
             0o700
         );
         for (key, value) in args.as_object().unwrap() {
-            if key != "prompt" && key != "reply_to" {
+            if key != "reply_to" {
                 assert_eq!(&updated[key], value);
             }
         }

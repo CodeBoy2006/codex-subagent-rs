@@ -348,6 +348,7 @@ impl App {
             skip_git_repo_check: args.skip_git_repo_check,
         };
         let inherited = inheritance::inspect(config, &settings.cwd, control).await?;
+        let snapshot_profile = runner::snapshot_profile(config, &settings, &args, control).await?;
         let prompt = args.prompt_text();
         Ok((
             Invocation {
@@ -355,6 +356,7 @@ impl App {
                 args,
                 inheritance: inherited,
                 prompt,
+                snapshot_profile,
             },
             notes,
         ))
