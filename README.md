@@ -153,7 +153,7 @@ Supported effort vocabulary: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
 
 ## Completion and recovery
 
-To continue a timed-out task, take the `thread_id` from its report and call `codex_follow_up`:
+After a timeout, the caller decides whether to use the partial result and stop or to continue the task. To continue, take the `thread_id` from the timeout report and call `codex_follow_up`:
 
 ```json
 {"thread_id":"<thread_id from the report>","prompt":"Continue the original task from where it stopped. Keep completed work.","mode":"background"}

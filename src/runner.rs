@@ -335,7 +335,7 @@ impl RunResult {
             s.push_str(&format!(" | thread_id={id}"));
             if self.timed_out && !self.cancelled {
                 s.push_str(&format!(
-                    "\nTo resume the timed-out task, call codex_follow_up with thread_id \"{id}\" and a continuation prompt. Use mode \"background\" to resume without blocking. The follow-up has its own timeout."
+                    "\nThe caller decides whether to resume. If continuing serves the original task, call codex_follow_up with thread_id \"{id}\" and a continuation prompt. Otherwise, report the timeout and any useful partial results, then stop. The follow-up has its own timeout."
                 ));
             } else if !self.cancelled {
                 s.push_str(&format!(

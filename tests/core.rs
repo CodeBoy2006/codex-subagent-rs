@@ -165,7 +165,7 @@ fn prompts_reject_blank_tasks_and_prepend_only_native_policy() {
     );
 }
 #[test]
-fn only_uncancelled_timeouts_suggest_resuming() {
+fn timeout_report_leaves_the_resume_decision_to_the_caller() {
     let inv = Invocation {
         settings: Settings {
             model: "alpha".into(),
@@ -190,8 +190,11 @@ fn only_uncancelled_timeouts_suggest_resuming() {
     ));
     result.timed_out = true;
     let report = result.render(&inv, &[]);
+    assert!(report.contains("The caller decides whether to resume"));
     assert!(report.contains("call codex_follow_up with thread_id \"thread-1\""));
-    assert!(report.contains("mode \"background\""));
+    assert!(
+        report.contains("Otherwise, report the timeout and any useful partial results, then stop")
+    );
     result.cancelled = true;
     let report = result.render(&inv, &[]);
     assert!(report.contains(" | thread_id=thread-1"));
