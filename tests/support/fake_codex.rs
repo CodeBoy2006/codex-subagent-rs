@@ -181,7 +181,7 @@ fn main() {
             fs::write(root.join(format!("{thread}.metadata.json")), json!({"model":model,"reasoningEffort":setting("model_reasoning_effort"),"cwd":cwd}).to_string()).unwrap();
             emit(json!({"type":"thread.started","thread_id":thread}));
             emit(json!({"type":"turn.started"}));
-            if case == "hold" {
+            if case == "hold" && !resume {
                 fs::write(
                     root.join(format!("{thread}.pid")),
                     std::process::id().to_string(),

@@ -285,7 +285,7 @@ impl App {
                 }
                 args.model = args.model.or(Some(p.model));
                 args.working_dir = args.working_dir.or(Some(p.cwd));
-                args.skip_git_repo_check = p.skip_git_repo_check;
+                args.skip_git_repo_check |= p.skip_git_repo_check;
             } else if args.model.is_none()
                 || args.working_dir.is_none()
                 || args.reasoning_effort.is_none()
@@ -417,7 +417,7 @@ impl App {
                     finished_clock: None,
                     model: inv.settings.model.clone(),
                     effort: inv.settings.effort.clone(),
-                    thread: None,
+                    thread: inv.args.thread_id.clone(),
                     commands: 0,
                     activity: VecDeque::new(),
                     cancel: cancel.clone(),

@@ -257,8 +257,8 @@ impl RunArgs {
         }
         if let Some(id) = &self.reply_to {
             ensure!(
-                self.mode.as_deref() == Some("background") && !followup,
-                "reply_to requires a background delegation"
+                self.mode.as_deref() == Some("background"),
+                "reply_to requires background mode"
             );
             ensure!(
                 crate::completion::uuid(id),

@@ -234,14 +234,14 @@ pub struct RunResult {
 }
 impl RunResult {
     pub fn failure(&self) -> Option<String> {
+        if self.cancelled {
+            return Some("Delegation was cancelled before it finished".into());
+        }
         if let Some(s) = &self.not_started {
             return Some(s.clone());
         }
         if self.timed_out {
             return Some("Delegation exceeded its timeout and was terminated".into());
-        }
-        if self.cancelled {
-            return Some("Delegation was cancelled before it finished".into());
         }
         if let Some(s) = &self.turn_failure {
             return Some(format!("Codex turn failed: {s}"));
@@ -333,11 +333,17 @@ impl RunResult {
         }
         if let Some(id) = &self.thread_id {
             s.push_str(&format!(" | thread_id={id}"));
-            if !self.cancelled {
+            if self.timed_out && !self.cancelled {
+                s.push_str(&format!(
+                    "\nTo resume the timed-out task, call codex_follow_up with thread_id \"{id}\" and a continuation prompt. Use mode \"background\" to resume without blocking. The follow-up has its own timeout."
+                ));
+            } else if !self.cancelled {
                 s.push_str(&format!(
                     "\nContinue with codex_follow_up using thread_id \"{id}\"."
                 ));
             }
+        } else if self.timed_out && !self.cancelled {
+            s.push_str("\nCodex did not report a thread_id; there is no known thread to resume.");
         }
         s.push_str("\n\nToken usage (parent thread only; native subagents excluded):");
         s.push_str(&format!(

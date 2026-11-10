@@ -562,6 +562,84 @@ async fn eight_tools_and_job_recovery_through_real_stdio() {
 }
 
 #[tokio::test]
+async fn timed_out_job_can_resume_in_background_after_mcp_restart() {
+    let root = tempfile::tempdir().unwrap();
+    let root = root.path().canonicalize().unwrap();
+    let mut owner = Client::start(&root).await;
+    let id = job(&owner
+        .delegate(
+            "hold",
+            json!({"mode":"background","timeout_seconds":1,"model":"beta","reasoning_effort":"low","use_worktree":true}),
+        )
+        .await);
+    let timeout_report = owner.finish_job(&id).await;
+    assert_eq!(timeout_report["isError"], true);
+    assert!(text(&timeout_report).contains("exceeded its timeout"));
+    let thread_id = thread(&timeout_report);
+    owner.stop().await;
+
+    let mut resumed = Client::start(&root).await;
+    assert_eq!(
+        resumed.call("codex_job_result", json!({"job_id":id})).await,
+        timeout_report
+    );
+    assert_eq!(
+        calls(&root)
+            .iter()
+            .filter(|v| v["args"][0] == "exec")
+            .count(),
+        1
+    );
+    let origin = uuid::Uuid::new_v4().to_string();
+    let transcript = root.join("transcript.jsonl");
+    std::fs::write(&transcript, "{\"text\":\"Continue the task\"}\n").unwrap();
+    let args = json!({"mode":"background","thread_id":thread_id,"prompt":"Continue the task","skip_git_repo_check":true});
+    let event = json!({"conversationId":origin,"transcriptPath":transcript,"toolCall":{"name":"call_mcp_tool","args":{"ServerName":"codex","ToolName":"codex_follow_up","Arguments":args}}});
+    let bound = run_hook(&root, &event).await;
+    assert_eq!(bound["decision"], "ask");
+    let updated = &bound["overwrite"]["Arguments"];
+    assert_eq!(updated["reply_to"], origin);
+    let continued = job(&resumed.call("codex_follow_up", updated.clone()).await);
+    assert_ne!(continued, id);
+    let result = resumed.finish_job(&continued).await;
+    success(&result);
+    assert_eq!(thread(&result), thread_id);
+    assert!(text(&result).contains("requested model=beta | effort=low"));
+    let exec = calls(&root)
+        .into_iter()
+        .filter(|v| v["args"][0] == "exec")
+        .collect::<Vec<_>>();
+    assert_eq!(exec.len(), 2);
+    assert_eq!(exec[1]["args"][1], "resume");
+    assert_eq!(exec[1]["args"][2], thread_id);
+    assert_eq!(exec[1]["cwd"], root.join("worktree").to_str().unwrap());
+    assert!(
+        exec[1]["args"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("--skip-git-repo-check"))
+    );
+    assert!(
+        !exec[1]["args"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("--worktree"))
+    );
+    let pending = root
+        .join("events")
+        .join(format!("{continued}.pending.json"));
+    wait_file(&pending).await;
+    let event: Event = serde_json::from_slice(&std::fs::read(pending).unwrap()).unwrap();
+    assert_eq!(event.conversation_id, origin);
+    assert_eq!(event.state, State::Completed);
+    assert_eq!(
+        resumed.call("codex_job_result", json!({"job_id":id})).await,
+        timeout_report
+    );
+    resumed.stop().await;
+}
+
+#[tokio::test]
 async fn persisted_job_survives_owner_exit_without_restarting_work() {
     let root = tempfile::tempdir().unwrap();
     let root = root.path().canonicalize().unwrap();

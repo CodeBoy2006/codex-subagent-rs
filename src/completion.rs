@@ -131,7 +131,7 @@ pub fn bind_hook(event: &Value, events_dir: &Path) -> Result<Value> {
             .as_object()
             .context("Arguments must be an object")?
             .clone();
-        if args["ToolName"] == "codex_delegate" && args["Arguments"]["mode"] == "background" {
+        if args["Arguments"]["mode"] == "background" {
             let id = event["conversationId"]
                 .as_str()
                 .filter(|s| uuid(s))

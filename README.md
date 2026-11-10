@@ -41,7 +41,7 @@ MCP and Sidecar must share an absolute completion directory. Set `CODEX_SUBAGENT
 ~/.local/share/codex-subagent-rs/completion/events
 ```
 
-The Hook supplies conversation context to `codex_delegate` and `codex_follow_up` calls on server `codex`. For background delegations, it also replaces `reply_to` with the host's conversation ID. Successful calls preserve `decision: "ask"`.
+The Hook supplies conversation context to `codex_delegate` and `codex_follow_up` calls on server `codex`. For either call in background mode, it also replaces `reply_to` with the host's conversation ID. Successful calls preserve `decision: "ask"`.
 
 The Sidecar uses `agentapi` from `PATH`. If Antigravity supplies `ANTIGRAVITY_AGENTAPI_EXE`, it invokes that binary with `agentapi send-message ...`. Register the Sidecar with the host when switching; running the MCP alone does not start notifications.
 
@@ -94,7 +94,7 @@ This check uses temporary Codex homes, verifies both native backends' existing s
 | `codex_doctor` | Diagnose executable, version, login status and configuration on demand. |
 | `list_codex_models` | List live models, efforts and context windows from the CLI catalog. |
 | `codex_delegate` | Execute a self-contained task, blocking or in the background. |
-| `codex_follow_up` | Continue a Codex `thread_id`, preserving its model, effort and directory unless overridden. |
+| `codex_follow_up` | Continue a Codex `thread_id` in blocking or background mode, preserving its model, effort and directory unless overridden. |
 | `codex_job_status` | Inspect a background job, or list known jobs when `job_id` is omitted. |
 | `codex_job_result` | Read a finished job, including persisted callback reports after an MCP restart. |
 | `codex_job_cancel` | Request cancellation and terminate the job's process tree. |
@@ -152,6 +152,16 @@ It reuses Codex's sign-in and never starts a model turn. Unreported windows rema
 Supported effort vocabulary: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra`. Actual model support comes from the live catalog. Invalid environment settings remain visible through `codex_doctor`; they refuse new delegation rather than silently relaxing policy.
 
 ## Completion and recovery
+
+To continue a timed-out task, take the `thread_id` from its report and call `codex_follow_up`:
+
+```json
+{"thread_id":"<thread_id from the report>","prompt":"Continue the original task from where it stopped. Keep completed work.","mode":"background"}
+```
+
+The follow-up starts a fresh execution budget on the same Codex thread and returns a new `job_id`. The original timeout report stays unchanged. Omit `mode` to wait for the result in the tool call. If the original task ran outside Git, pass `skip_git_repo_check: true` when resuming after an MCP restart. If it needs write access, request the sandbox for the new turn explicitly.
+
+Timeouts do not trigger automatic follow-ups. Resume only once the result is available and contains a `thread_id`; do not resume cancelled jobs.
 
 Every background job saves `<job_id>.job.json` in the existing completion directory, with or without `reply_to`. This is the single persisted report record; it contains the job/thread mapping, state, timestamps, model/effort, callback destination and final report. The record is written before returning the job ID, updated when Codex reports its thread ID or cancellation is requested, and finalized after process cleanup. Writes use atomic replacement.
 

@@ -165,7 +165,7 @@ fn prompts_reject_blank_tasks_and_prepend_only_native_policy() {
     );
 }
 #[test]
-fn cancelled_results_preserve_thread_without_suggesting_follow_up() {
+fn only_uncancelled_timeouts_suggest_resuming() {
     let inv = Invocation {
         settings: Settings {
             model: "alpha".into(),
@@ -188,10 +188,20 @@ fn cancelled_results_preserve_thread_without_suggesting_follow_up() {
     assert!(result.render(&inv, &[]).contains(
         " | thread_id=thread-1\nContinue with codex_follow_up using thread_id \"thread-1\"."
     ));
+    result.timed_out = true;
+    let report = result.render(&inv, &[]);
+    assert!(report.contains("call codex_follow_up with thread_id \"thread-1\""));
+    assert!(report.contains("mode \"background\""));
     result.cancelled = true;
     let report = result.render(&inv, &[]);
     assert!(report.contains(" | thread_id=thread-1"));
-    assert!(!report.contains("Continue with codex_follow_up"));
+    assert!(report.contains("Delegation was cancelled"));
+    assert!(!report.contains("codex_follow_up"));
+    result.cancelled = false;
+    result.thread_id = None;
+    let report = result.render(&inv, &[]);
+    assert!(report.contains("there is no known thread to resume"));
+    assert!(!report.contains("codex_follow_up"));
 }
 #[test]
 fn jsonl_handles_utf8_split_and_recovers_after_oversize() {
